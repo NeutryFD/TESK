@@ -27,7 +27,7 @@ setup(
     name='teskcore',
 
     # https://pypi.python.org/pypi/setuptools_scm
-    use_scm_version=True,
+    version='1.14.0',
 
     description='TES on Kubernetes',
     long_description=LONG_DESC,
@@ -76,7 +76,7 @@ setup(
     # https://packaging.python.org/en/latest/requirements.html
     install_requires=INSTALL_DEPS,
 
-    setup_requires=['setuptools_scm'],
+    setup_requires=[],
 
     tests_require=TEST_DEPS,
 

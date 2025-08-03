@@ -42,7 +42,7 @@ fi
 
 # Install TESK using Helm
 echo "📦 Installing TESK Helm chart..."
-cd TESK/charts/tesk
+cd charts/tesk
 
 # Check if TESK is already installed and uninstall it
 if helm list -n cromwell-ns | grep -q "tesk-release"; then

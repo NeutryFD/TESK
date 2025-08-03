@@ -1,0 +1,8 @@
+# Use a working base image and copy our modified code
+FROM docker.io/elixir-cloud-aai/tesk-core:v0.10.4
+
+# Copy our updated taskmaster.py with direct PVC mount features
+COPY src/tesk_core/taskmaster.py /usr/local/lib/python3.7/site-packages/tesk_core/taskmaster.py
+
+# Set the entry point
+ENTRYPOINT ["python3", "-m", "tesk_core.taskmaster"]

@@ -22,7 +22,7 @@ tesk:
     image: docker.io/elixircloud/tesk-api:1.1.0
     port: 8080
     taskmaster_image_name: docker.io/neutry/tesk-core-taskmaster
-    taskmaster_image_version: "v1.13.0-path-fixed"
+    taskmaster_image_version: "v1.14.1-bugfix"
     taskmaster_filer_image_name: docker.io/neutry/tesk-core-filer
     taskmaster_filer_image_version: v1.0.0-root
     debug: false

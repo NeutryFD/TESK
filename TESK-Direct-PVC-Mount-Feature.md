@@ -1,5 +1,9 @@
 # TESK Direct PVC Mount Feature
 
+**Current Version**: v1.14.1-bugfix  
+**Image**: `neutry/tesk-core-taskmaster:v1.14.1-bugfix`  
+**Status**: Production Ready ✅
+
 ## Overview
 
 This feature implements **direct PVC mounting** for TESK (Task Execution Service for Kubernetes) when integrated with Cromwell, eliminating the need for file copying between workflow execution and task execution phases. This optimization significantly improves performance and reduces resource usage by allowing both Cromwell and TESK tasks to access the same shared storage directly.
@@ -153,7 +157,8 @@ The feature uses these environment variables for coordination:
    - Configured TESK endpoint
 
 4. **Docker Images**:
-   - `neutry/tesk-core-taskmaster:v1.13.0-path-fixed` - Updated taskmaster with shared PVC support
+   - `neutry/tesk-core-taskmaster:v1.14.1-bugfix` - Latest version with job status detection fix
+   - `neutry/tesk-core-filer:v1.0.0-root` - Compatible filer image
 
 ## Installation and Usage
 
@@ -286,9 +291,26 @@ kubectl logs task-xxx -n cromwell-ns
 
 ## Version History
 
+- **v1.14.1-bugfix**: Fixed job status detection bug (handles both Complete and SuccessCriteriaMet conditions)
+- **v1.14.0-final**: Complete Direct PVC Mount implementation with optimized taskmaster
 - **v1.13.0-path-fixed**: Fixed subPath calculation bug (resolved "dir0" issue)
 - **v1.13.0-fixed-staging**: Added error handling and code reviews
 - **v1.13.0-dynamic-mounts**: Initial implementation with dynamic mount generation
+
+### Bug Fix Details (v1.14.1-bugfix)
+
+**Issue**: Job status detection was incorrectly reporting 'Error' for successful jobs when Kubernetes returned multiple job conditions.
+
+**Root Cause**: The original code only checked `job.status.conditions[0]` and if it wasn't exactly 'Complete', it defaulted to 'Error'. However, newer Kubernetes versions can return conditions like:
+1. `SuccessCriteriaMet: True` (first condition)
+2. `Complete: True` (second condition)
+
+**Fix**: Modified `get_status()` method in `job.py` to:
+- Check all job conditions, not just the first one
+- Accept both `Complete` and `SuccessCriteriaMet` as valid success indicators
+- Default to 'Running' instead of 'Error' for ambiguous states
+
+**Impact**: Eliminates false "Cancelling taskmaster: Got status Error" messages when jobs actually succeed.
 
 ## Future Enhancements
 

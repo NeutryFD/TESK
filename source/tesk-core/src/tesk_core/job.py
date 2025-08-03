@@ -46,12 +46,17 @@ class Job:
     def get_status(self, is_all_pods_runnning):
         job = self.bv1.read_namespaced_job(self.name, self.namespace)
         try:
-            if job.status.conditions[0].type == 'Complete' and job.status.conditions[0].status:
-                self.status = 'Complete'
-            elif job.status.conditions[0].type == 'Failed' and job.status.conditions[0].status:
-                self.status = 'Failed'
+            # Check all conditions, not just the first one
+            for condition in job.status.conditions:
+                if (condition.type == 'Complete' or condition.type == 'SuccessCriteriaMet') and condition.status == 'True':
+                    self.status = 'Complete'
+                    break
+                elif condition.type == 'Failed' and condition.status == 'True':
+                    self.status = 'Failed'
+                    break
             else:
-                self.status = 'Error'
+                # If no Complete/Success or Failed condition found, check for other valid states
+                self.status = 'Running'  # Default to Running instead of Error
         except TypeError:  # The condition is not initialized, so it is not complete yet, wait for it
             self.status = 'Running'
             job_duration = 0
