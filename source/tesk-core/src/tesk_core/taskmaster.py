@@ -18,16 +18,81 @@ task_volume_basename = 'task-volume'
 args = None
 logger = None
 
-def run_executor(executor, namespace, pvc=None):
+def run_executor(executor, namespace, pvc=None, task_data=None):
     jobname = executor['metadata']['name']
     spec = executor['spec']['template']['spec']
 
     if os.environ.get('EXECUTOR_BACKOFF_LIMIT') is not None:
         executor['spec'].update({'backoffLimit': int(os.environ['EXECUTOR_BACKOFF_LIMIT'])})
 
+    # Simple path alignment: no remapping needed when paths match
+    shared_pvc_name = os.environ.get('TRANSFER_PVC_NAME')
+    if shared_pvc_name:
+        logger.info(f'Using shared PVC: {shared_pvc_name} with direct path mounting')
+
     if pvc is not None:
         mounts = spec['containers'][0].setdefault('volumeMounts', [])
         mounts.extend(pvc.volume_mounts)
+        
+        # When using shared PVC, extract unique paths dynamically from JSON
+        if shared_pvc_name and task_data:
+            unique_paths = set()
+            
+            # Get base path from environment or use default
+            base_path = os.environ.get('TES_BASE_PATH', '/data')
+            
+            # Extract all paths from inputs URLs
+            for input_item in task_data.get('inputs', []):
+                if 'url' in input_item:
+                    url_path = os.path.dirname(input_item['url'])
+                    if url_path and url_path != '/':
+                        unique_paths.add(url_path)
+            
+            # Extract all paths from outputs URLs  
+            for output_item in task_data.get('outputs', []):
+                if 'url' in output_item:
+                    url_path = os.path.dirname(output_item['url'])
+                    if url_path and url_path != '/':
+                        unique_paths.add(url_path)
+            
+            # Extract all paths from inputs PATHs
+            for input_item in task_data.get('inputs', []):
+                if 'path' in input_item:
+                    path_dir = os.path.dirname(input_item['path'])
+                    if path_dir and path_dir != '/':
+                        unique_paths.add(path_dir)
+            
+            # Extract all paths from outputs PATHs
+            for output_item in task_data.get('outputs', []):
+                if 'path' in output_item:
+                    path_dir = os.path.dirname(output_item['path'])
+                    if path_dir and path_dir != '/':
+                        unique_paths.add(path_dir)
+            
+            # Get existing mount paths to avoid duplicates
+            existing_mounts = set(mount.get('mountPath', '') for mount in mounts)
+            
+            # Create dynamic mounts for each unique path, avoiding duplicates
+            for mount_path in unique_paths:
+                if mount_path != base_path and mount_path not in existing_mounts:  # Skip if already mounted
+                    # Calculate subpath by removing base_path prefix
+                    if mount_path.startswith(base_path + '/'):
+                        subpath = mount_path[len(base_path + '/'):]
+                    elif mount_path.startswith(base_path):
+                        subpath = mount_path[len(base_path):].lstrip('/')
+                    else:
+                        subpath = mount_path.lstrip('/')
+                    
+                    if subpath:  # Only add if subpath is not empty
+                        mounts.append({
+                            'name': task_volume_basename,
+                            'mountPath': mount_path,
+                            'subPath': subpath
+                        })
+                        logger.info(f'Added dynamic mount: {mount_path} -> pvc/{subpath}')
+                else:
+                    logger.info(f'Skipped duplicate mount: {mount_path} (already exists)')
+        
         volumes = spec.setdefault('volumes', [])
         volumes.extend([{'name': task_volume_basename, 'persistentVolumeClaim': {
             'readonly': False, 'claimName': pvc.name}}])
@@ -48,7 +113,6 @@ def run_executor(executor, namespace, pvc=None):
 
 
 def append_mount(volume_mounts, name, path, pvc):
-
     # Checks all mount paths in volume_mounts if the path given is already in
     # there
     duplicate = next(
@@ -56,7 +120,21 @@ def append_mount(volume_mounts, name, path, pvc):
         None)
     # If not, add mount path
     if duplicate is None:
-        subpath = pvc.get_subpath()
+        # For shared PVC, calculate actual relative path instead of generated subpath
+        shared_pvc_name = os.environ.get('TRANSFER_PVC_NAME')
+        if shared_pvc_name and pvc.name == shared_pvc_name:
+            # Calculate subpath by removing base_path prefix for shared PVC
+            base_path = os.environ.get('TES_BASE_PATH', '/data')
+            if path.startswith(base_path + '/'):
+                subpath = path[len(base_path + '/'):]
+            elif path.startswith(base_path):
+                subpath = path[len(base_path):].lstrip('/')
+            else:
+                subpath = path.lstrip('/')
+        else:
+            # Original behavior for task-specific PVCs
+            subpath = pvc.get_subpath()
+            
         logger.debug(' '.join(
             ['appending' + name +
              'at path' + path +
@@ -83,10 +161,11 @@ def generate_mounts(data, pvc):
     # gather volumes that need to be mounted, without duplicates
     volume_name = task_volume_basename
     for volume in data['volumes']:
-        append_mount(volume_mounts, volume_name, volume, pvc)
+        mount_path = volume
+        append_mount(volume_mounts, volume_name, mount_path, pvc)
 
     # gather other paths that need to be mounted from inputs/outputs FILE and
-    # DIRECTORY entries
+    # DIRECTORY entries  
     for aninput in data['inputs']:
         dirnm = dirname(aninput)
         append_mount(volume_mounts, volume_name, dirnm, pvc)
@@ -99,38 +178,67 @@ def generate_mounts(data, pvc):
 
 
 def init_pvc(data, filer):
+    global created_pvc  # Declare global variable at the beginning
     task_name = data['executors'][0]['metadata']['labels']['taskmaster-name']
-    pvc_name = task_name + '-pvc'
-    pvc_size = data['resources']['disk_gb']
-    pvc = PVC(pvc_name, pvc_size, args.namespace)
+    
+    # Check if we should use shared PVC instead of creating task-specific PVC
+    shared_pvc_name = os.environ.get('TRANSFER_PVC_NAME')
+    if shared_pvc_name:
+        logger.info(f'Using shared PVC: {shared_pvc_name} for direct mounting')
+        
+        # Create a PVC object that references the existing shared PVC
+        pvc = PVC(shared_pvc_name, 0, args.namespace)  # size 0 means don't create
+        pvc.skip_creation = True  # Flag to skip actual creation
+        
+        mounts = generate_mounts(data, pvc)
+        logging.debug(mounts)
+        logging.debug(type(mounts))
+        pvc.set_volume_mounts(mounts)
+        
+        # Only add volume mount to filer if filer is provided
+        if filer:
+            filer.add_volume_mount(pvc)
+        
+        # Skip PVC creation and filer jobs - use direct mounting
+        created_pvc = None  # Don't track for cleanup since we didn't create it
+        
+        if os.environ.get('NETRC_SECRET_NAME') is not None and filer:
+            filer.add_netrc_mount(os.environ.get('NETRC_SECRET_NAME'))
+            
+        logger.info('Skipping filer jobs - using direct PVC mounting')
+        return pvc
+    else:
+        # Original behavior for backwards compatibility
+        pvc_name = task_name + '-pvc'
+        pvc_size = data['resources']['disk_gb']
+        pvc = PVC(pvc_name, pvc_size, args.namespace)
 
-    mounts = generate_mounts(data, pvc)
-    logging.debug(mounts)
-    logging.debug(type(mounts))
-    pvc.set_volume_mounts(mounts)
-    filer.add_volume_mount(pvc)
+        mounts = generate_mounts(data, pvc)
+        logging.debug(mounts)
+        logging.debug(type(mounts))
+        pvc.set_volume_mounts(mounts)
+        filer.add_volume_mount(pvc)
 
-    pvc.create()
-    # to global var for cleanup purposes
-    global created_pvc
-    created_pvc = pvc
+        pvc.create()
+        # to global var for cleanup purposes
+        created_pvc = pvc
 
-    if os.environ.get('NETRC_SECRET_NAME') is not None:
-        filer.add_netrc_mount(os.environ.get('NETRC_SECRET_NAME'))
+        if os.environ.get('NETRC_SECRET_NAME') is not None:
+            filer.add_netrc_mount(os.environ.get('NETRC_SECRET_NAME'))
 
-    filerjob = Job(
-        filer.get_spec('inputs', args.debug),
-        task_name + '-inputs-filer',
-        args.namespace)
+        filerjob = Job(
+            filer.get_spec('inputs', args.debug),
+            task_name + '-inputs-filer',
+            args.namespace)
 
-    global created_jobs
-    created_jobs.append(filerjob)
-    # filerjob.run_to_completion(poll_interval)
-    status = filerjob.run_to_completion(poll_interval, check_cancelled, args.pod_timeout)
-    if status != 'Complete':
-        exit_cancelled('Got status ' + status)
+        global created_jobs
+        created_jobs.append(filerjob)
+        # filerjob.run_to_completion(poll_interval)
+        status = filerjob.run_to_completion(poll_interval, check_cancelled, args.pod_timeout)
+        if status != 'Complete':
+            exit_cancelled('Got status ' + status)
 
-    return pvc
+        return pvc
 
 
 def run_task(data, filer_name, filer_version, have_json_pvc=False):
@@ -142,8 +250,18 @@ def run_task(data, filer_name, filer_version, have_json_pvc=False):
     else:
         json_pvc = None
 
-    if data['volumes'] or data['inputs'] or data['outputs']:
-
+    # Check if we should use shared PVC and skip filer jobs entirely
+    shared_pvc_name = os.environ.get('TRANSFER_PVC_NAME')
+    
+    # Debug logging - inspect JSON structure
+    logger.info(f'TASK DEBUG: shared_pvc_name = {shared_pvc_name}')
+    logger.info(f'TASK DEBUG: volumes = {data.get("volumes", [])}')
+    logger.info(f'TASK DEBUG: inputs = {data.get("inputs", [])}')
+    logger.info(f'TASK DEBUG: outputs = {data.get("outputs", [])}')
+    
+    if (data['volumes'] or data['inputs'] or data['outputs']) and not shared_pvc_name:
+        # Original behavior: create filer and run input filer
+        logger.info('TASK DEBUG: Using original filer behavior')
         filer = Filer(task_name + '-filer', data, filer_name, filer_version, args.pull_policy_always, json_pvc)
 
         if os.environ.get('TESK_FTP_USERNAME') is not None:
@@ -155,15 +273,36 @@ def run_task(data, filer_name, filer_version, have_json_pvc=False):
             filer.set_backoffLimit(int(os.environ['FILER_BACKOFF_LIMIT']))
 
         pvc = init_pvc(data, filer)
+        
+    elif shared_pvc_name:
+        # Direct PVC mounting: create PVC reference without filer
+        logger.info(f'TASK DEBUG: Using shared PVC {shared_pvc_name} - direct path mounting (no file copying)')
+        
+        # Create PVC object for shared PVC
+        pvc = PVC(shared_pvc_name, 0, args.namespace)
+        pvc.skip_creation = True
+        
+        # Set up basic volume mounts for shared PVC - paths should align naturally
+        mounts = generate_mounts(data, pvc)
+        pvc.set_volume_mounts(mounts)
+        
+        # Set created_pvc to None since we're not creating it
+        global created_pvc
+        created_pvc = None
+    else:
+        logger.info('TASK DEBUG: No volumes, inputs, or outputs detected - no filer needed')
+
+    logger.info(f'TASK DEBUG: Final PVC name = {pvc.name if pvc else "None"}')
 
     for executor in data['executors']:
-        run_executor(executor, args.namespace, pvc)
+        run_executor(executor, args.namespace, pvc, data)
 
     # run executors
     logging.debug("Finished running executors")
 
-    # upload files and delete pvc
-    if data['volumes'] or data['inputs'] or data['outputs']:
+    # Skip output filer entirely when using shared PVC
+    if (data['volumes'] or data['inputs'] or data['outputs']) and not shared_pvc_name:
+        # Original behavior: run output filer and delete PVC
         filerjob = Job(
             filer.get_spec('outputs', args.debug),
             task_name + '-outputs-filer',
@@ -178,6 +317,8 @@ def run_task(data, filer_name, filer_version, have_json_pvc=False):
             exit_cancelled('Got status ' + status)
         else:
             pvc.delete()
+    elif shared_pvc_name:
+        logger.info('Skipping filer jobs - using shared PVC direct mounting (no file copying)')
 
 
 def newParser():

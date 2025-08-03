@@ -3,7 +3,7 @@
 # Declare variables to be passed into your templates.
 
 # host_name: tes.tsi.ebi.ac.uk
-host_name: ""
+host_name: "tesk.cromwell.local"
 #
 #
 #
@@ -12,7 +12,7 @@ host_name: ""
 storage: none
 
 # Configurable storage class. 
-storageClass: 
+storageClass: nfs-csi 
 
 tesk:
     # if empty - default base path; currently /ga4gh/tes/v1
@@ -21,10 +21,10 @@ tesk:
     tes_api_base_path: /ga4gh/tes/v1
     image: docker.io/elixircloud/tesk-api:1.1.0
     port: 8080
-    taskmaster_image_name:  docker.io/elixircloud/tesk-core-taskmaster
-    taskmaster_image_version: v0.10.2
-    taskmaster_filer_image_name: docker.io/elixircloud/tesk-core-filer
-    taskmaster_filer_image_version: v0.10.2
+    taskmaster_image_name: docker.io/neutry/tesk-core-taskmaster
+    taskmaster_image_version: "v1.13.0-path-fixed"
+    taskmaster_filer_image_name: docker.io/neutry/tesk-core-filer
+    taskmaster_filer_image_version: v1.0.0-root
     debug: false
     executor_retries: 2
     filer_retries: 2
@@ -38,15 +38,16 @@ tesk:
       enabled: true
 
 transfer:
-    # If you want local file systems support (i.e. 'file:' urls in inputs and outputs),
-    # you have to define these 2 properties.
-    active: false
+    # Set transfer active to true to pass environment variables, but use direct mounting
+    active: true
 
-    # wes_base_path: '/data'      # WesElixir via docker-compose
-    wes_base_path: '/tmp'         # WesElixir locally
-                                  # Change the value of $wesBasePath in minikubeStart accordingly
-    tes_base_path: '/transfer'
-    pvc_name: 'transfer-pvc'
+    # These paths are used for direct PVC mounting
+    wes_base_path: '/data'                    # Host path (Cromwell side)
+    tes_base_path: '/data'                    # Container path (Task side) - mount at /data
+    pvc_name: 'pvc-cromwell'                  # Force all tasks to use the shared PVC
+
+# Force storage settings for direct mounting
+storageClass: 'nfs-csi'        # Use your existing storage class
 
 auth:
     # the following variables are specific to each deployment
@@ -61,9 +62,7 @@ service:
     # use:
     # - NodePort, if you want to expose API directly
     # - LoadBalancer for cloud provider (gcloud) or empty otherwise
-    # type: NodePort
-    # node_port: 31567
-    type: ""
+    type: ClusterIP
     node_port: ""
 
 ftp:
