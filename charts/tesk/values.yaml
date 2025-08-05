@@ -3,7 +3,7 @@
 # Declare variables to be passed into your templates.
 
 # host_name: tes.tsi.ebi.ac.uk
-host_name: "tesk.cromwell.local"
+host_name: ""
 #
 #
 #
@@ -12,7 +12,7 @@ host_name: "tesk.cromwell.local"
 storage: none
 
 # Configurable storage class. 
-storageClass: nfs-csi 
+storageClass: azurefile 
 
 tesk:
     # if empty - default base path; currently /ga4gh/tes/v1
@@ -44,10 +44,10 @@ transfer:
     # These paths are used for direct PVC mounting
     wes_base_path: '/data'                    # Host path (Cromwell side)
     tes_base_path: '/data'                    # Container path (Task side) - mount at /data
-    pvc_name: 'pvc-cromwell'                  # Force all tasks to use the shared PVC
+    pvc_name: 'azurefile-cromwell-pvc'       # Force all tasks to use the shared PVC
 
 # Force storage settings for direct mounting
-storageClass: 'nfs-csi'        # Use your existing storage class
+storageClass: 'azurefile'       # Use your existing storage class
 
 auth:
     # the following variables are specific to each deployment
