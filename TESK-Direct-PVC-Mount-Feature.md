@@ -30,7 +30,7 @@ This feature implements **direct PVC mounting** for TESK (Task Execution Service
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
 │   Cromwell      │    │   Shared PVC     │    │   TESK Tasks    │
 │                 │    │   (pvc-cromwell) │    │                 │
-│ Creates scripts │───►│ /data/SimpleTest/│◄───│ Execute scripts │
+│ Creates scripts │───►│ /data/MyWorkflow/│◄───│ Execute scripts │
 │ Manages output  │    │ ├── workflow-1/  │    │ Direct mount    │
 │ Direct mount    │    │ ├── workflow-2/  │    │ No file copy    │
 └─────────────────┘    │ └── workflow-n/  │    └─────────────────┘
@@ -128,10 +128,10 @@ The feature uses these environment variables for coordination:
 ```
 /data/
 ├── cromwell.conf                    # Cromwell configuration
-├── simple_test.wdl                  # Workflow definition
-├── SimpleTest/                      # Workflow executions
+├── my_workflow.wdl                  # Workflow definition
+├── MyWorkflow/                      # Workflow executions
 │   └── {workflow-id}/
-│       └── call-HelloWorld/
+│       └── call-MyTask/
 │           └── execution/
 │               ├── script           # Generated execution script
 │               ├── stdout           # Task output
@@ -191,28 +191,28 @@ kubectl apply -f k8s/c-cromwel.yaml
 # Run workflow inside Cromwell pod
 kubectl exec -it cromwell-pod -n cromwell-ns -- \
   java -Dconfig.file=/data/cromwell.conf \
-  -jar /app/cromwell.jar run /data/simple_test.wdl
+  -jar /app/cromwell.jar run /data/my_workflow.wdl
 ```
 
 ## Example Execution
 
-### Input: Simple Hello World Workflow
+### Input: Generic Workflow Example
 ```wdl
 version 1.0
 
-workflow SimpleTest {
-  call HelloWorld
+workflow MyWorkflow {
+  call MyTask
   output {
-    String message = HelloWorld.message
+    String result = MyTask.result
   }
 }
 
-task HelloWorld {
+task MyTask {
   command {
-    echo "Hello, World!"
+    echo "Processing data..."
   }
   output {
-    String message = stdout()
+    String result = stdout()
   }
   runtime {
     docker: "ubuntu:latest"
@@ -221,18 +221,18 @@ task HelloWorld {
 ```
 
 ### Execution Flow:
-1. **Cromwell** creates execution directory: `/data/SimpleTest/{workflow-id}/call-HelloWorld/execution/`
+1. **Cromwell** creates execution directory: `/data/MyWorkflow/{workflow-id}/call-MyTask/execution/`
 2. **Cromwell** generates script file: `script`
 3. **TESK** receives task with paths pointing to shared storage
-4. **Taskmaster** calculates mount: `/data/SimpleTest/.../execution` → `SimpleTest/.../execution`
+4. **Taskmaster** calculates mount: `/data/MyWorkflow/.../execution` → `MyWorkflow/.../execution`
 5. **Task container** mounts shared PVC subdirectory and executes script
 6. **Output files** written directly to shared storage
 
 ### Output Files:
 ```bash
-/data/SimpleTest/d465f105-6b81-4174-af62-a0802152b9af/call-HelloWorld/execution/
+/data/MyWorkflow/d465f105-6b81-4174-af62-a0802152b9af/call-MyTask/execution/
 ├── script    # Cromwell-generated execution script
-├── stdout    # "Hello, World!"
+├── stdout    # "Processing data..."
 ├── stderr    # (empty)
 └── rc        # 0 (success)
 ```
@@ -283,7 +283,7 @@ kubectl describe pod tesk-api-xxx -n cromwell-ns | grep -A 20 "Environment:"
 kubectl describe pod task-xxx-ex-00-xxx -n cromwell-ns | grep -A 10 "Mounts:"
 
 # Verify shared PVC contents
-kubectl exec -it cromwell-pod -n cromwell-ns -- ls -la /data/SimpleTest/
+kubectl exec -it cromwell-pod -n cromwell-ns -- ls -la /data/MyWorkflow/
 
 # Check taskmaster logs
 kubectl logs task-xxx -n cromwell-ns
