@@ -96,7 +96,7 @@ def run_executor(executor, namespace, pvc=None, task_data=None):
         volumes = spec.setdefault('volumes', [])
         volumes.extend([{'name': task_volume_basename, 'persistentVolumeClaim': {
             'readonly': False, 'claimName': pvc.name}}])
-    logger.debug('Created job: ' + jobname)
+    logger.info('Created job: ' + jobname)
     job = Job(executor, jobname, namespace)
     logger.debug('Job spec: ' + str(job.body))
 
@@ -188,7 +188,6 @@ def init_pvc(data, filer):
         
         # Create a PVC object that references the existing shared PVC
         pvc = PVC(shared_pvc_name, 0, args.namespace)  # size 0 means don't create
-        pvc.skip_creation = True  # Flag to skip actual creation
         
         mounts = generate_mounts(data, pvc)
         logging.debug(mounts)
@@ -278,10 +277,9 @@ def run_task(data, filer_name, filer_version, have_json_pvc=False):
         # Direct PVC mounting: create PVC reference without filer
         logger.info(f'TASK DEBUG: Using shared PVC {shared_pvc_name} - direct path mounting (no file copying)')
         
-        # Create PVC object for shared PVC
+        #This is just a reference, don't create it in k8s    
         pvc = PVC(shared_pvc_name, 0, args.namespace)
-        pvc.skip_creation = True
-        
+
         # Set up basic volume mounts for shared PVC - paths should align naturally
         mounts = generate_mounts(data, pvc)
         pvc.set_volume_mounts(mounts)
@@ -405,7 +403,7 @@ def main():
 
     poll_interval = args.poll_interval
 
-    loglevel = logging.ERROR
+    loglevel = logging.INFO  # Changed from ERROR to INFO
     if args.debug:
         loglevel = logging.DEBUG
 
